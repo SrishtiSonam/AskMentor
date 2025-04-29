@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat Room</title>
+  <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    #chat-box {
+      height: 400px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      padding: 10px;
+      background: #f8f9fa;
+      display: flex;
+      flex-direction: column;
+    }
+    .message { margin-bottom: 10px; padding: 8px 12px; border-radius: 8px; max-width: 70%; }
+    .message.received { background: #e2e3e5; align-self: flex-start; }
+    .message.sent { background: #bee5eb; align-self: flex-end; }
+    .system { background: #f5c6cb; text-align: center; font-style: italic; align-self: center; }
+    #connection-status.connected { background-color: #d4edda; color: #155724; }
+    #connection-status.disconnected { background-color: #f8d7da; color: #721c24; }
+    #connection-status.connecting { background-color: #fff3cd; color: #856404; }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container mt-4">
+  <h3>Logged in as: <span class="text-primary">{{ username }}</span></h3>
+  <div id="connection-status" class="alert connecting">Connecting...</div>
+
+  <div id="chat-box"></div>
+
+  <form id="chat-form" class="mt-3">
+    <div class="form-group">
+      <input type="text" class="form-control" id="recipient" placeholder="Recipient Username" required>
+    </div>
+    <div class="form-group">
+      <textarea class="form-control" id="message" rows="2" placeholder="Your message..." required></textarea>
+    </div>
+    <div class="d-flex justify-content-between">
+      <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
+      <button type="button" class="btn btn-warning" id="reconnect-btn">Reconnect</button>
+      <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
+    </div>
+  </form>
+</div>
+
+<script>
+const chatBox = document.getElementById("chat-box");
+const form = document.getElementById("chat-form");
+const status = document.getElementById("connection-status");
+const reconnectBtn = document.getElementById("reconnect-btn");
+const sendBtn = document.getElementById("send-btn");
+let username = "{{ username }}";
+let reconnecting = false;
+
+function addMessage(sender, message, isSystem=false) {
+  const div = document.createElement("div");
+  div.className = `message ${isSystem ? 'system' : (sender === username ? 'sent' : 'received')}`;
+
+  if (isSystem) {
+    div.textContent = message;
+  } else if (sender === username) {
+    div.textContent = `To: ${document.getElementById("recipient").value} - ${message}`;
+  } else {
+    div.textContent = `From ${sender}: ${message}`;
+  }
+
+  chatBox.appendChild(div);
+  chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+let notifiedDisconnected = false;
+
+function checkConnection() {
+  if (reconnecting) return;
+
+  fetch("/connection_status")
+    .then(res => res.json())
+    .then(data => {
+      if (data.status === 'connected') {
+        status.className = 'alert connected';
+        status.textContent = 'Connected';
+        sendBtn.disabled = false;
+        notifiedDisconnected = false;
+      } else {
+        status.className = 'alert disconnected';
+        status.textContent = 'Disconnected';
+        sendBtn.disabled = true;
+
+        if (!notifiedDisconnected) {
+          addMessage('System', 'Connection to server lost. Click "Reconnect" button to try again.', true);
+          notifiedDisconnected = true;
+        }
+      }
+    })
+    .catch(err => {
+      console.error("Connection check error:", err);
+      status.className = 'alert disconnected';
+      status.textContent = 'Error checking connection';
+      sendBtn.disabled = true;
+    });
+}
+
+function attemptReconnect() {
+  if (reconnecting) return;
+
+  reconnecting = true;
+  status.className = 'alert connecting';
+  status.textContent = 'Reconnecting...';
+
+  addMessage('System', 'Attempting to reconnect...', true);
+
+  fetch("/reconnect")
+    .then(res => res.json())
+    .then(data => {
+      if (data.status === 'success') {
+        addMessage('System', 'Reconnected successfully!', true);
+        status.className = 'alert connected';
+        status.textContent = 'Connected';
+        sendBtn.disabled = false;
+      } else {
+        addMessage('System', 'Reconnection attempted. Please check your connection.', true);
+        status.className = 'alert disconnected';
+        status.textContent = 'Disconnected';
+        sendBtn.disabled = true;
+      }
+    })
+    .catch(err => {
+      console.error("Reconnection error:", err);
+      addMessage('System', 'Reconnection failed. Please try again later.', true);
+      status.className = 'alert disconnected';
+      status.textContent = 'Reconnection failed';
+      sendBtn.disabled = true;
+    })
+    .finally(() => {
+      reconnecting = false;
+    });
+}
+
+reconnectBtn.addEventListener("click", attemptReconnect);
+
+form.addEventListener("submit", e => {
+  e.preventDefault();
+  const recipientField = document.getElementById("recipient");
+  const messageField = document.getElementById("message");
+  const recipient = recipientField.value.trim();
+  const message = messageField.value.trim();
+
+  // Basic validation
+  if (!recipient) {
+    addMessage('System', 'Please enter a recipient username', true);
+    recipientField.focus();
+    return;
+  }
+
+  if (!message) {
+    addMessage('System', 'Please enter a message', true);
+    messageField.focus();
+    return;
+  }
+
+  // Check if sending to self
+  if (recipient === username) {
+    addMessage('System', 'You cannot send messages to yourself', true);
+    return;
+  }
+
+  // Disable send button while processing
+  sendBtn.disabled = true;
+
+  fetch("/send_chat", {
+    method: "POST",
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `recipient=${encodeURIComponent(recipient)}&message=${encodeURIComponent(message)}`
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.status === 'sent') {
+      // No need to add message here as it will come back through the receive_messages endpoint
+      messageField.value = "";
+    } else {
+      addMessage('System', data.message || 'Failed to send message', true);
+      if (data.message && data.message.includes("not connected")) {
+        attemptReconnect();
+      }
+    }
+  })
+  .catch(err => {
+    console.error("Send error:", err);
+    addMessage('System', 'Error sending message. Please check your connection.', true);
+    attemptReconnect();
+  })
+  .finally(() => {
+    sendBtn.disabled = false;
+  });
+});
+
+function receiveMessages() {
+  if (reconnecting) return;
+
+  fetch("/receive_messages")
+    .then(res => res.json())
+    .then(data => {
+      for (const msg of data) {
+        addMessage(msg.sender, msg.message, msg.type === 'system');
+      }
+    })
+    .catch(err => {
+      console.error("Receive error:", err);
+    });
+}
+
+// Initial connection check
+checkConnection();
+
+// Set up intervals
+setInterval(receiveMessages, 1000);
+setInterval(checkConnection, 5000);
+
+// Check for visibility changes to handle browser tab switching
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    // When tab becomes visible again, check connection immediately
+    checkConnection();
+  }
+});
+</script>
+</body>
+</html>
