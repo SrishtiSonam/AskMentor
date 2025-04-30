@@ -17,7 +17,7 @@ context.verify_mode = ssl.CERT_NONE
 client_socket = None
 messages = []
 connection_alive = False
-socket_lock = threading.Lock()  # Add lock for thread safety
+socket_lock = threading.Lock()
 
 def connect_to_server():
     global client_socket, connection_alive
@@ -63,16 +63,13 @@ def receive_chat_messages():
                 if not connection_alive:
                     continue
 
-                # Send a keep-alive ping only every 30 seconds instead of each loop
-                if int(time.time()) % 30 == 0:
+                if int(time.time()) % 60 == 0:
                     try:
                         client_socket.sendall(b'PING')
-                        # Don't wait for response here, we'll handle it below
                     except:
                         connection_alive = False
                         continue
 
-                # Set a shorter timeout for receiving data
                 client_socket.settimeout(1.0)
                 data = client_socket.recv(BUFFER_SIZE).decode('utf-8')
 
@@ -108,14 +105,11 @@ def receive_chat_messages():
                     })
 
                 elif data == "PONG":
-                    # Keep-alive acknowledged - do nothing
                     pass
 
-                # Reset timeout to normal after successful receive
                 client_socket.settimeout(5.0)
 
         except socket.timeout:
-            # Timeout is normal, just continue
             continue
         except Exception as e:
             print(f"Receiver thread error: {e}")
@@ -177,7 +171,7 @@ def register():
 def chat():
     if 'username' not in session:
         return redirect(url_for('login'))
-    ensure_receiver_thread()  # Make sure receiver thread is running
+    ensure_receiver_thread()
     return render_template('chat.html', username=session['username'])
 
 @app.route('/send_chat', methods=['POST'])
@@ -189,18 +183,12 @@ def send_chat():
     recipient = request.form['recipient']
     message = request.form['message']
 
-    # Validate recipient
     if not recipient or not message:
         return jsonify({'status': 'error', 'message': 'Recipient and message required'})
 
-    # Check if sending to self - block on client side
-    if recipient == session['username']:
-        return jsonify({'status': 'error', 'message': 'Cannot message yourself'})
-
-    # Check connection and try to reconnect if needed
     if not connection_alive:
         if connect_to_server():
-            # Re-authenticate after reconnection
+
             response = send_to_server(f"LOGIN:{session['username']}:{session.get('password', '')}")
             if not response or "Success" not in response:
                 return jsonify({'status': 'error', 'message': 'Reconnection failed - please log in again'})
@@ -211,10 +199,8 @@ def send_chat():
         else:
             return jsonify({'status': 'error', 'message': 'Server not connected'})
 
-    # Send the message
     response = send_to_server(f"CHAT:{recipient}:{message}")
     if response and response == "CHAT_SENT":
-        # Add message to local display
         messages.append({
             "sender": session['username'],
             "recipient": recipient,
@@ -259,7 +245,6 @@ def reconnect():
     global connection_alive
     if not connection_alive and 'username' in session:
         if connect_to_server():
-            # Re-authenticate after reconnection
             response = send_to_server(f"LOGIN:{session['username']}:{session.get('password', '')}")
             if response and "Success" in response:
                 auth_status = client_socket.recv(BUFFER_SIZE).decode('utf-8')

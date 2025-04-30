@@ -5,7 +5,6 @@ def register_user(username, password):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     try:
-        # Create table if not exists
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,7 +46,7 @@ BUFFER_SIZE = 1024
 FILE_STORAGE_DIR = "server_files"
 os.makedirs(FILE_STORAGE_DIR, exist_ok=True)
 
-# Thread-safe client dictionary
+
 clients_lock = threading.Lock()
 clients = {}
 
@@ -77,16 +76,12 @@ def handle_client(conn, addr):
 
         if "Success" in response:
             with clients_lock:
-                # If same user was already logged in elsewhere, remove old connection
                 if username in clients:
                     try:
                         old_conn = clients[username]
                         old_conn.sendall("ERROR:Logged in elsewhere".encode('utf-8'))
-                        # Let the old connection thread clean itself up
                     except:
                         pass
-
-                # Register the new connection
                 clients[username] = conn
 
             conn.sendall("AUTH_SUCCESS".encode('utf-8'))
@@ -94,8 +89,7 @@ def handle_client(conn, addr):
             conn.sendall("AUTH_FAILED".encode('utf-8'))
             return
 
-        # Set a timeout for the socket operations
-        conn.settimeout(60)  # 60 seconds timeout
+        conn.settimeout(60)
 
         while True:
             try:
@@ -127,7 +121,6 @@ def handle_client(conn, addr):
                     conn.sendall("ERROR:Unknown command".encode("utf-8"))
 
             except socket.timeout:
-                # Just to keep the connection alive, do nothing on timeout
                 continue
             except ConnectionResetError:
                 print(f"Connection reset by {username}")
@@ -149,28 +142,12 @@ def handle_client(conn, addr):
 
 def send_message(sender, recipient, message, sender_socket):
     """Send a message from sender to recipient"""
-    if sender == recipient:
-        # Don't allow messaging yourself
-        sender_socket.sendall("ERROR:Cannot send message to yourself".encode('utf-8'))
-        return
 
     with clients_lock:
-        if recipient in clients:
-            try:
-                # Send to recipient
-                recipient_socket = clients[recipient]
-                recipient_socket.sendall(f"CHAT:{sender}:{message}".encode('utf-8'))
+        recipient_socket = clients[recipient]
+        recipient_socket.sendall(f"CHAT:{sender}:{message}".encode('utf-8'))
+        sender_socket.sendall("CHAT_SENT".encode('utf-8'))
 
-                # Confirm to sender
-                sender_socket.sendall("CHAT_SENT".encode('utf-8'))
-            except Exception as e:
-                print(f"Failed to send message: {e}")
-                sender_socket.sendall("ERROR:Failed to send message".encode('utf-8'))
-                # Remove recipient if their connection is broken
-                if recipient in clients:
-                    remove_client(recipient)
-        else:
-            sender_socket.sendall("ERROR:Recipient not online".encode('utf-8'))
 
 def handle_file_request(sender, recipient, filename, filesize):
     with clients_lock:
@@ -179,7 +156,6 @@ def handle_file_request(sender, recipient, filename, filesize):
                 clients[recipient].sendall(f"FILE_REQUEST:{sender}:{filename}:{filesize}".encode('utf-8'))
             except Exception as e:
                 print(f"File send error: {e}")
-                # Remove recipient if their connection is broken
                 if recipient in clients:
                     remove_client(recipient)
 
@@ -190,7 +166,6 @@ def remove_client(username):
             print(f"{username} disconnected.")
 
 def main():
-    # Initialize the database if it doesn't exist
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -203,10 +178,8 @@ def main():
     conn.commit()
     conn.close()
 
-    # Set up SSL context
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
 
-    # Check if certificate files exist
     if not os.path.isfile(CERT_FILE) or not os.path.isfile(KEY_FILE):
         print("Certificate files missing. Generating self-signed certificate...")
         os.system(f"openssl req -x509 -newkey rsa:4096 -keyout {KEY_FILE} -out {CERT_FILE} -days 365 -nodes -subj '/CN=localhost'")
@@ -218,9 +191,7 @@ def main():
         print("Please make sure valid certificate files exist.")
         return
 
-    # Start server
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        # Allow address reuse to avoid "Address already in use" errors on restart
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         try:
